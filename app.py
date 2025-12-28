@@ -45,7 +45,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">🎓 대입 합격예측 AI 컨설턴트</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🎓 입시 상담 챗봇</div>', unsafe_allow_html=True)
 
 # ==========================================
 # 2. DB 및 API 설정
@@ -227,3 +227,4 @@ if prompt := st.chat_input("질문 입력 (예: 컴퓨터공학과 가능할까�
 
             st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
+
