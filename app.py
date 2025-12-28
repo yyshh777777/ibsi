@@ -5,14 +5,54 @@ import os
 from chromadb.utils import embedding_functions
 
 # ==========================================
-# 1. 기본 설정 및 DB 연결
+# 1. 페이지 설정 및 디자인 (UI 개선)
 # ==========================================
 st.set_page_config(page_title="입시 컨설팅 AI", page_icon="🎓", layout="wide")
-st.title("🎓 대입 합격예측 AI 컨설턴트")
 
+# CSS로 디자인 꾸미기
+st.markdown("""
+<style>
+    /* 전체 폰트 및 배경 */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    
+    /* 채팅창 스타일 */
+    .stChatMessage {
+        border-radius: 15px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    .stChatMessage[data-testid="stChatMessage"]:nth-child(odd) {
+        background-color: #e3f2fd; /* 사용자 질문 배경색 (연한 파랑) */
+        border: 1px solid #bbdefb;
+    }
+    
+    /* 헤더 스타일 */
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1565c0;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    
+    /* 사이드바 스타일 */
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e0e0e0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="main-header">🎓 대입 합격예측 AI 컨설턴트</div>', unsafe_allow_html=True)
+
+# ==========================================
+# 2. DB 및 API 설정
+# ==========================================
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    api_key = st.sidebar.text_input("OpenAI API Key를 입력하세요", type="password")
+    api_key = st.sidebar.text_input("🔑 OpenAI API Key 입력", type="password")
 
 if not api_key:
     st.warning("⚠️ 왼쪽 사이드바에 API 키를 입력해주세요.")
@@ -36,38 +76,24 @@ collection = get_collection(api_key)
 if not collection: st.stop()
 
 # ==========================================
-# 2. (핵심 수정) 스마트 필터링 로직
+# 3. 데이터 로드 및 필터링
 # ==========================================
 @st.cache_data
 def get_filter_options():
-    """
-    DB에서 학교명과 전형을 가져와서
-    띄어쓰기가 달라도 같은 의미면 하나로 합칩니다.
-    """
     try:
         data = collection.get(include=["metadatas"])
-        
-        # 학교명 처리
         school_set = set()
-        
-        # 전형 처리 (매핑 딕셔너리 생성)
-        # 예: {'학생부교과전형': ['학생부 교과 전형', '학생부 교과전형']}
         type_map = {} 
         
         for meta in data['metadatas']:
-            # 학교명 수집
             if "학교명" in meta and meta["학교명"]:
                 school_set.add(meta["학교명"])
             
-            # 전형 이름 정규화 (띄어쓰기 제거)
             if "전형" in meta and meta["전형"]:
                 raw_val = meta["전형"]
-                # 띄어쓰기를 모두 없앤 이름을 '대표 이름'으로 사용
                 clean_name = raw_val.replace(" ", "")
-                
                 if clean_name not in type_map:
                     type_map[clean_name] = []
-                # 실제 DB에 있는 값을 리스트에 추가 (나중에 검색할 때 씀)
                 if raw_val not in type_map[clean_name]:
                     type_map[clean_name].append(raw_val)
 
@@ -75,129 +101,129 @@ def get_filter_options():
     except:
         return [], {}
 
-# 학교 목록과 전형 매핑 정보 가져오기
 school_list, type_mapping = get_filter_options()
-
-# 사이드바 표시용 전형 리스트 (띄어쓰기 없는 깔끔한 이름들)
 display_types = ["전체"] + sorted(list(type_mapping.keys()))
 
 # ==========================================
-# 3. 사이드바 UI
+# 4. 사이드바 UI (프로필 카드 형태)
 # ==========================================
-st.sidebar.header("📝 학생 정보 입력")
+with st.sidebar:
+    st.header("📋 학생 프로필 설정")
+    
+    with st.expander("🏫 목표 대학 및 전형", expanded=True):
+        target_school = st.selectbox("희망 대학", ["전체"] + school_list)
+        selected_display_type = st.selectbox("희망 전형", display_types)
 
-target_school = st.sidebar.selectbox("희망 대학", ["전체"] + school_list)
-# 사용자는 깔끔한 이름("학생부교과전형")을 선택함
-selected_display_type = st.sidebar.selectbox("희망 전형", display_types)
-
-my_grade = st.sidebar.number_input(
-    "내신 등급 (직접 입력)", 
-    min_value=1.00, max_value=9.00, value=3.00, step=0.00, format="%.2f"
-)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📄 생활기록부 수준")
-record_level = st.sidebar.select_slider(
-    "생기부 퀄리티 선택",
-    options=["하 (기본)", "중 (평범)", "상 (우수)", "최상 (특목고)"],
-    value="중 (평범)"
-)
+    st.markdown("---")
+    
+    with st.container():
+        st.subheader("📊 나의 성적")
+        col1, col2 = st.columns(2)
+        with col1:
+            my_grade = st.number_input("내신 등급", 1.00, 9.00, 3.00, 0.1, format="%.2f")
+        with col2:
+            record_level = st.select_slider(
+                "생기부 수준", 
+                options=["하", "중", "상", "최상"], 
+                value="중"
+            )
+        
+        # 시각적 피드백
+        st.info(f"현재 설정: **{my_grade}등급** / 생기부 **{record_level}**")
+        st.caption("💡 숫자가 작을수록(1.0) 좋은 성적임을 AI가 계산합니다.")
 
 # ==========================================
-# 4. RAG 및 대화 로직
+# 5. 메인 채팅 로직
 # ==========================================
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "안녕하세요! 어떤 대학/학과를 목표로 하시나요?"}]
+    st.session_state.messages = [{"role": "assistant", "content": "안녕하세요! 👋\n성적과 생기부를 분석하여 합격 가능성을 예측해 드립니다.\n궁금한 학과나 대학을 물어보세요!"}]
 
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-if prompt := st.chat_input("질문 입력"):
+if prompt := st.chat_input("질문 입력 (예: 컴퓨터공학과 가능할까요?)"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("분석 중..."):
+        with st.spinner("🔍 입시 데이터 정밀 분석 중..."):
             
-            # --- 1. 필터 조건 생성 (고급) ---
+            # 필터링
             where_conditions = []
-            
-            # 학교 필터
             if target_school != "전체":
                 where_conditions.append({"학교명": target_school})
             
-            # 전형 필터 (핵심 수정!)
             if selected_display_type != "전체":
-                # 사용자가 선택한 '깔끔한 이름'에 연결된 '실제 DB 값들'을 모두 가져옴
-                # 예: ["학생부 교과 전형", "학생부 교과전형"]
                 real_db_values = type_mapping[selected_display_type]
-                
                 if len(real_db_values) == 1:
-                    # 값이 하나면 단순 일치 검색
                     where_conditions.append({"전형": real_db_values[0]})
                 else:
-                    # 값이 여러 개면 $in 연산자로 "이거 아니면 저거" 검색
                     where_conditions.append({"전형": {"$in": real_db_values}})
 
-            # ChromaDB where 절 조합
             final_where = None
             if len(where_conditions) == 1:
                 final_where = where_conditions[0]
             elif len(where_conditions) > 1:
                 final_where = {"$and": where_conditions}
 
-            # --- 2. 검색 및 답변 ---
             try:
-                results = collection.query(
-                    query_texts=[prompt],
-                    n_results=5,
-                    where=final_where
-                )
-                
+                # 검색 실행
+                results = collection.query(query_texts=[prompt], n_results=5, where=final_where)
                 docs = results['documents'][0]
                 metas = results['metadatas'][0]
                 
                 context = ""
                 if docs:
                     for i, doc in enumerate(docs):
-                        # 전형 이름을 보여줄 때도 깔끔하게 표시 가능
-                        context += f"[{metas[i]['학교명']} {metas[i]['전형']}] {doc}\n"
+                        context += f"데이터{i+1}: [{metas[i]['학교명']} {metas[i]['전형']}] {doc}\n"
                 else:
-                    context = "조건에 맞는 데이터가 없습니다. 일반적인 입시 조언을 제공합니다."
+                    context = "해당 조건의 정확한 데이터가 없습니다."
 
-                # 시스템 프롬프트 (생기부 로직 반영)
+                # ==========================================
+                # 🔥 핵심 수정: 숫자 감각 및 로직 강화 프롬프트
+                # ==========================================
                 system_prompt = f"""
-                당신은 입시 컨설턴트입니다.
-                
-                [학생 정보]
-                - 내신: {my_grade}등급
-                - 생기부: {record_level}
-                
-                [판단 로직]
-                1. 생기부 '상/최상': 학종 지원 시 내신 컷보다 0.5~0.8 낮아도 '소신/적정' 판정.
-                2. 생기부 '중/하': 학종보다는 교과 위주 추천. 내신 컷 준수 필수.
-                3. 데이터의 '50% cut', '70% cut'과 학생 내신을 비교하여 합격 확률(%)을 추정하세요.
+                당신은 냉철한 입시 분석가입니다. 아래 규칙을 절대적으로 따르세요.
 
-                [입시 데이터]
+                [학생 정보]
+                - 내 등급: {my_grade} (숫자가 작을수록 공부 잘함)
+                - 생기부: {record_level}
+
+                [수학적 판단 규칙 (필수 준수)]
+                1. 입시에서 '등급'은 1.0에 가까울수록 우수하고, 9.0에 가까울수록 저조합니다.
+                2. 비교 공식: (내 등급 - 대학 커트라인) = '차이값'
+                   - 차이값이 양수(+)면: 내 등급 숫자가 더 큼 -> 성적이 더 나쁨 -> **[불합격/위험/상향]**
+                   - 차이값이 음수(-)면: 내 등급 숫자가 더 작음 -> 성적이 더 좋음 -> **[합격/안정/하향]**
+                   - 예시: 내 등급 3.0 vs 컷 2.0 -> 차이 +1.0 (성적 부족) -> 위험
+                   - 예시: 내 등급 2.0 vs 컷 3.0 -> 차이 -1.0 (성적 여유) -> 안정
+
+                [생기부 반영 규칙]
+                - 생기부가 '상/최상'이고 '학생부종합' 전형일 때만: 내 성적이 커트라인보다 0.5~0.7등급 나빠도(숫자가 커도) "소신 지원"으로 판정.
+                - 그 외(교과전형, 생기부 하)는 무조건 숫자 비교만 따를 것.
+
+                [데이터]
                 {context}
-                
-                위 정보를 바탕으로 이전 대화 맥락을 고려하여 답변하세요.
+
+                [답변 양식]
+                1. **판정 결과:** (안정/소신/상향/위험 중 택1)
+                2. **상세 분석:** (위 수학적 계산 결과를 근거로 설명)
+                3. **조언:** (현실적인 전략 제안)
                 """
-                
-                # 메모리 기능
+
+                # 메모리 + 호출
                 msgs = [{"role": "system", "content": system_prompt}]
-                msgs.extend(st.session_state.messages[-4:]) # 최근 4개 대화 기억
+                msgs.extend(st.session_state.messages[-4:])
 
                 client = OpenAI(api_key=api_key)
                 res = client.chat.completions.create(
                     model="gpt-4o",
                     messages=msgs,
-                    temperature=0.2
+                    temperature=0.1 # 창의성 낮춤 (계산 정확도 위함)
                 )
                 answer = res.choices[0].message.content
 
             except Exception as e:
-                answer = f"오류 발생: {e}"
+                answer = f"⚠️ 오류가 발생했습니다: {e}"
 
-            st.write(answer)
+            st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
