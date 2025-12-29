@@ -51,15 +51,19 @@ st.markdown('<div class="main-header">🎓 대입 합격예측 AI 컨설턴트</
 # 2. DB 및 API 설정
 # ==========================================
 try:
-    # 1. Streamlit Cloud의 Secrets(비밀 금고)에서 키를 가져옵니다.
+    # 1. secrets.toml 파일이나 Cloud의 Secrets 설정에서 키를 찾습니다.
     api_key = st.secrets["OPENAI_API_KEY"]
-except:
-    # 2. 만약 설정이 안 되어 있다면 수동 입력을 요청합니다. (에러 방지용)
-    api_key = st.sidebar.text_input("🔑 OpenAI API Key 입력", type="password")
-
-if not api_key:
-    st.warning("⚠️ 앱을 실행하려면 API 키가 필요합니다. (Secrets 설정 확인 필요)")
+except FileNotFoundError:
+    # 2. 로컬에 파일이 없거나 설정이 안 된 경우 안내
+    st.error("Secrets 설정이 되어있지 않습니다. .streamlit/secrets.toml 파일을 확인하세요.")
     st.stop()
+except KeyError:
+    # 3. 파일은 있는데 키 이름이 틀린 경우
+    st.error("Secrets에 'OPENAI_API_KEY'가 저장되어 있지 않습니다.")
+    st.stop()
+
+# 이후 코드는 api_key 변수를 그대로 사용하면 됩니다.
+# if not api_key: ... (이 부분은 이제 필요 없으므로 지워도 됩니다)
 
 @st.cache_resource
 def get_collection(_api_key):
@@ -231,5 +235,6 @@ if prompt := st.chat_input("질문 입력 (예: 컴퓨터공학과 가능할까�
             st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
             
+
 
 
