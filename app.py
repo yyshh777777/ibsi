@@ -45,17 +45,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">🎓 입시 상담 챗봇</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🎓 대입 합격예측 AI 컨설턴트</div>', unsafe_allow_html=True)
 
 # ==========================================
 # 2. DB 및 API 설정
 # ==========================================
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
+try:
+    # 1. Streamlit Cloud의 Secrets(비밀 금고)에서 키를 가져옵니다.
+    api_key = st.secrets["OPENAI_API_KEY"]
+except:
+    # 2. 만약 설정이 안 되어 있다면 수동 입력을 요청합니다. (에러 방지용)
     api_key = st.sidebar.text_input("🔑 OpenAI API Key 입력", type="password")
 
 if not api_key:
-    st.warning("⚠️ 왼쪽 사이드바에 API 키를 입력해주세요.")
+    st.warning("⚠️ 앱을 실행하려면 API 키가 필요합니다. (Secrets 설정 확인 필요)")
     st.stop()
 
 @st.cache_resource
@@ -227,4 +230,6 @@ if prompt := st.chat_input("질문 입력 (예: 컴퓨터공학과 가능할까�
 
             st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
+            
+
 
