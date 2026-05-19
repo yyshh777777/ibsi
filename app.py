@@ -1,11 +1,13 @@
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+
 import streamlit as st
 import pandas as pd
 import chromadb
 from openai import OpenAI
-import os
 from chromadb.utils import embedding_functions
+
+# 이 아래로 기존 코드 계속...
 
 # ==========================================
 # 1. 페이지 설정 및 디자인 (기존 UI 유지 및 개선)
