@@ -1,15 +1,15 @@
 import streamlit as st
+import pandas as pd
 import chromadb
 from openai import OpenAI
 import os
 from chromadb.utils import embedding_functions
 
 # ==========================================
-# 1. 페이지 설정 및 디자인 (UI 개선)
+# 1. 페이지 설정 및 디자인 (기존 UI 유지 및 개선)
 # ==========================================
 st.set_page_config(page_title="입시 컨설팅 AI", page_icon="🎓", layout="wide")
 
-# CSS로 디자인 꾸미기
 st.markdown("""
 <style>
     /* 전체 폰트 및 배경 */
@@ -48,78 +48,96 @@ st.markdown("""
 st.markdown('<div class="main-header">🎓 대입 합격예측 AI 컨설턴트</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 2. DB 및 API 설정
+# 2. API 설정 및 안전한 키 로드
 # ==========================================
 try:
-    # 1. secrets.toml 파일이나 Cloud의 Secrets 설정에서 키를 찾습니다.
+    # 로컬환경(.streamlit/secrets.toml) 및 Streamlit Cloud Secrets에서 키 로드
     api_key = st.secrets["OPENAI_API_KEY"]
-except FileNotFoundError:
-    # 2. 로컬에 파일이 없거나 설정이 안 된 경우 안내
-    st.error("Secrets 설정이 되어있지 않습니다. .streamlit/secrets.toml 파일을 확인하세요.")
+except (KeyError, FileNotFoundError):
+    st.error("⚠️ Secrets 설정이 되어있지 않습니다. 사이드바 설정을 확인하거나 .streamlit/secrets.toml 파일을 확인하세요.")
     st.stop()
-except KeyError:
-    # 3. 파일은 있는데 키 이름이 틀린 경우
-    st.error("Secrets에 'OPENAI_API_KEY'가 저장되어 있지 않습니다.")
-    st.stop()
-
-# 이후 코드는 api_key 변수를 그대로 사용하면 됩니다.
-# if not api_key: ... (이 부분은 이제 필요 없으므로 지워도 됩니다)
-
-@st.cache_resource
-def get_collection(_api_key):
-    try:
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-            api_key=_api_key,
-            model_name="text-embedding-3-small"
-        )
-        client = chromadb.PersistentClient(path="./chroma_db")
-        col = client.get_collection(name="admissions", embedding_function=openai_ef)
-        return col
-    except Exception as e:
-        st.error(f"DB 연결 실패: {e}")
-        return None
-
-collection = get_collection(api_key)
-if not collection: st.stop()
 
 # ==========================================
-# 3. 데이터 로드 및 필터링
+# 3. CSV 데이터 자동 로드 및 ChromaDB 빌드
+# ==========================================
+CSV_FILE_PATH = "ibsi.csv"
+
+@st.cache_resource
+def init_vector_db(_api_key):
+    """CSV 파일을 읽어서 ChromaDB에 자동으로 인덱싱하는 함수"""
+    openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=_api_key,
+        model_name="text-embedding-3-small"
+    )
+    
+    # 임베딩 전용 고유 클라이언트 생성 (임시/인메모리 방식 혹은 가벼운 로컬 디렉토리)
+    client = chromadb.PersistentClient(path="./chroma_db")
+    collection = client.get_or_create_collection(name="admissions_idx", embedding_function=openai_ef)
+    
+    # DB에 데이터가 비어있는 경우에만 CSV 데이터 삽입 (속도 최적화)
+    if collection.count() == 0:
+        if not os.path.exists(CSV_FILE_PATH):
+            st.error(f"❌ '{CSV_FILE_PATH}' 파일이 루트 디렉토리에 존재하지 않습니다. 파일을 배치해 주세요.")
+            st.stop()
+            
+        df = pd.read_csv(CSV_FILE_PATH)
+        
+        documents = []
+        metadatas = []
+        ids = []
+        
+        for i, row in df.iterrows():
+            # AI가 읽기 좋은 형태의 텍스트 문서 생성
+            doc_text = (
+                f"대학: {row['학교명']}, 전형: {row['전형']}, 학과(모집단위): {row['모집단위']}, "
+                f"50% 커트라인: {row['50% cut']}등급, 70% 커트라인: {row['70% cut']}등급, "
+                f"반영교과: {row['평가에 반영된 교과목']}"
+            )
+            documents.append(doc_text)
+            
+            # 필터링에 사용할 메타데이터 구성 (공백 제거하여 매칭 확률 상승)
+            metadatas.append({
+                "학교명": str(row['학교명']).strip(),
+                "전형": str(row['전형']).strip(),
+                "모집단위": str(row['모집단위']).strip()
+            })
+            ids.append(f"id_{i}")
+            
+        # 데이터 분할 삽입 (ChromaDB 안정성 확보)
+        batch_size = 100
+        for idx in range(0, len(documents), batch_size):
+            collection.add(
+                documents=documents[idx:idx+batch_size],
+                metadatas=metadatas[idx:idx+batch_size],
+                ids=ids[idx:idx+batch_size]
+            )
+            
+    return collection
+
+# 데이터베이스 초기화 실행
+collection = init_vector_db(api_key)
+
+# ==========================================
+# 4. 사이드바 UI 및 필터 옵션 추출
 # ==========================================
 @st.cache_data
 def get_filter_options():
-    try:
-        data = collection.get(include=["metadatas"])
-        school_set = set()
-        type_map = {} 
-        
-        for meta in data['metadatas']:
-            if "학교명" in meta and meta["학교명"]:
-                school_set.add(meta["학교명"])
-            
-            if "전형" in meta and meta["전형"]:
-                raw_val = meta["전형"]
-                clean_name = raw_val.replace(" ", "")
-                if clean_name not in type_map:
-                    type_map[clean_name] = []
-                if raw_val not in type_map[clean_name]:
-                    type_map[clean_name].append(raw_val)
+    """사이드바 필터링을 위해 CSV에서 고유값 추출"""
+    if os.path.exists(CSV_FILE_PATH):
+        df = pd.read_csv(CSV_FILE_PATH)
+        schools = sorted(df['학교명'].dropna().unique().tolist())
+        types = sorted(df['전형'].dropna().unique().tolist())
+        return schools, types
+    return [], []
 
-        return sorted(list(school_set)), type_map
-    except:
-        return [], {}
+school_list, type_list = get_filter_options()
 
-school_list, type_mapping = get_filter_options()
-display_types = ["전체"] + sorted(list(type_mapping.keys()))
-
-# ==========================================
-# 4. 사이드바 UI (프로필 카드 형태)
-# ==========================================
 with st.sidebar:
     st.header("📋 학생 프로필 설정")
     
     with st.expander("🏫 목표 대학 및 전형", expanded=True):
         target_school = st.selectbox("희망 대학", ["전체"] + school_list)
-        selected_display_type = st.selectbox("희망 전형", display_types)
+        selected_type = st.selectbox("희망 전형", ["전체"] + type_list)
 
     st.markdown("---")
     
@@ -135,37 +153,37 @@ with st.sidebar:
                 value="중"
             )
         
-        # 시각적 피드백
         st.info(f"현재 설정: **{my_grade}등급** / 생기부 **{record_level}**")
-        st.caption("💡 숫자가 작을수록(1.0) 좋은 성적임을 AI가 계산합니다.")
+        st.caption("💡 숫자가 작을수록(1.0) 우수한 성적입니다.")
 
 # ==========================================
-# 5. 메인 채팅 로직
+# 5. 메인 채팅 로직 (대화 기억 기능 탑재)
 # ==========================================
+# 세션 상태에 대화 기록 보존 장치 마련
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "안녕하세요! 👋\n성적과 생기부를 분석하여 합격 가능성을 예측해 드립니다.\n궁금한 학과나 대학을 물어보세요!"}]
+    st.session_state.messages = [
+        {"role": "assistant", "content": "안녕하세요! 👋\n업로드된 공식 입시 데이터를 바탕으로 합격 가능성을 정확하게 예측해 드립니다.\n궁금한 대학이나 학과를 말씀해 주세요! (예: 부산대 국어교육과 가능할까요?)"}
+    ]
 
+# 대화 기록 렌더링
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-if prompt := st.chat_input("질문 입력 (예: 컴퓨터공학과 가능할까요?)"):
+# 유저 입력창 처리
+if prompt := st.chat_input("질문을 입력해 주세요..."):
+    # 1. 유저 발언 기록 및 화면 출력
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("🔍 입시 데이터 정밀 분석 중..."):
+        with st.spinner("🔍 데이터베이스에서 매칭되는 입시 정보 조회 중..."):
             
-            # 필터링
+            # 동적 metadata 필터링 조건 설정
             where_conditions = []
             if target_school != "전체":
                 where_conditions.append({"학교명": target_school})
-            
-            if selected_display_type != "전체":
-                real_db_values = type_mapping[selected_display_type]
-                if len(real_db_values) == 1:
-                    where_conditions.append({"전형": real_db_values[0]})
-                else:
-                    where_conditions.append({"전형": {"$in": real_db_values}})
+            if selected_type != "전체":
+                where_conditions.append({"전형": selected_type})
 
             final_where = None
             if len(where_conditions) == 1:
@@ -174,67 +192,62 @@ if prompt := st.chat_input("질문 입력 (예: 컴퓨터공학과 가능할까�
                 final_where = {"$and": where_conditions}
 
             try:
-                # 검색 실행
+                # 관련 데이터 5건 검색
                 results = collection.query(query_texts=[prompt], n_results=5, where=final_where)
-                docs = results['documents'][0]
-                metas = results['metadatas'][0]
+                docs = results['documents'][0] if results['documents'] else []
                 
                 context = ""
                 if docs:
                     for i, doc in enumerate(docs):
-                        context += f"데이터{i+1}: [{metas[i]['학교명']} {metas[i]['전형']}] {doc}\n"
+                        context += f"[입시데이터 {i+1}] {doc}\n"
                 else:
-                    context = "해당 조건의 정확한 데이터가 없습니다."
+                    context = "조건에 부합하는 정형화된 입시 데이터가 전혀 존재하지 않습니다."
 
-                # ==========================================
-                # 🔥 핵심 수정: 숫자 감각 및 로직 강화 프롬프트
-                # ==========================================
+                # 프롬프트 엔지니어링: 냉철한 분석가 페르소나 및 추론 금지 조항 강화
                 system_prompt = f"""
-                당신은 냉철한 입시 분석가입니다. 아래 규칙을 절대적으로 따르세요.
+                당신은 대한민국 최고 권위의 냉철하고 객관적인 대입 합격 예측 분석가입니다.
+                제공된 명확한 실측 데이터에만 근거하여 답변해야 하며, 없는 데이터를 가공하거나 임의로 '추론', '예측', '상상'해서 말하는 것을 절대 금지합니다.
 
-                [학생 정보]
-                - 내 등급: {my_grade} (숫자가 작을수록 공부 잘함)
-                - 생기부: {record_level}
+                [학생의 현재 프로필]
+                - 내신 등급: {my_grade}등급 (1.0에 가까울수록 최상위 성적, 9.0에 가까울수록 최하위 성적)
+                - 학교생활기록부 상태: {record_level}
 
-                [수학적 판단 규칙 (필수 준수)]
-                1. 입시에서 '등급'은 1.0에 가까울수록 우수하고, 9.0에 가까울수록 저조합니다.
-                2. 비교 공식: (내 등급 - 대학 커트라인) = '차이값'
-                   - 차이값이 양수(+)면: 내 등급 숫자가 더 큼 -> 성적이 더 나쁨 -> **[불합격/위험/상향]**
-                   - 차이값이 음수(-)면: 내 등급 숫자가 더 작음 -> 성적이 더 좋음 -> **[합격/안정/하향]**
-                   - 예시: 내 등급 3.0 vs 컷 2.0 -> 차이 +1.0 (성적 부족) -> 위험
-                   - 예시: 내 등급 2.0 vs 컷 3.0 -> 차이 -1.0 (성적 여유) -> 안정
+                [수학적 평가 절대 원칙]
+                - 공식: (학생 등급 - 데이터상의 커트라인 등급) = 차이값
+                - 차이값이 양수(+)이면: 학생의 등급 숫자가 더 큼 -> 성적이 미달함 -> 위험 또는 상향 지원 판정.
+                - 차이값이 음수(-)이면: 학생의 등급 숫자가 더 작음 -> 성적이 여유 있음 -> 안정 또는 적정 지원 판정.
+                
+                [★ 초정밀 RAG 지침 (필수)]
+                1. 제공된 [참고 데이터]에 사용자가 질문한 대학교나 학과의 컷(50% cut, 70% cut) 정보가 없다면, 절대로 "합격 가능성이 높다/낮다" 혹은 "이 점수대면 합격선일 것이다" 같은 가상의 추론 답변을 하지 마십시오.
+                2. 데이터가 없다면 정확하게 "제공된 데이터베이스에 해당 학과/대학에 대한 공식 컷 데이터가 부재하여 안내가 불가능합니다."라고만 명확히 선을 그으십시오.
 
-                [생기부 반영 규칙]
-                - 생기부가 '상/최상'이고 '학생부종합' 전형일 때만: 내 성적이 커트라인보다 0.5~0.7등급 나빠도(숫자가 커도) "소신 지원"으로 판정.
-                - 그 외(교과전형, 생기부 하)는 무조건 숫자 비교만 따를 것.
-
-                [데이터]
+                [제공된 실제 입시 데이터]
                 {context}
 
-                [답변 양식]
-                1. **판정 결과:** (안정/소신/상향/위험 중 택1)
-                2. **상세 분석:** (위 수학적 계산 결과를 근거로 설명)
-                3. **조언:** (현실적인 전략 제안)
+                [답변 필수 양식]
+                1. **판정 결과:** (안정 / 적정 / 소신 / 상향 / 위험 / 데이터 부족으로 판정 불가 중 택1)
+                2. **상세 분석:** (데이터에 기재된 50% cut, 70% cut 수치와 학생의 등급을 수학적으로 명확히 비교 계산하여 서술)
+                3. **전략적 조언:** (생기부 수준 및 해당 전형의 특징에 맞춘 현실적인 행동 지침 제공)
                 """
 
-                # 메모리 + 호출
+                # 대화 내역 기억 장치 연동 (최근 대화 기록 포함하여 전송)
                 msgs = [{"role": "system", "content": system_prompt}]
-                msgs.extend(st.session_state.messages[-4:])
+                
+                # 메모리 과부하 및 토큰 절약을 위해 시스템 프롬프트 외 최근 6개의 대화 쌍만 컨텍스트로 전달
+                msgs.extend(st.session_state.messages[-6:])
 
+                # OpenAI API 호출
                 client = OpenAI(api_key=api_key)
                 res = client.chat.completions.create(
                     model="gpt-4o",
                     messages=msgs,
-                    temperature=0.1 # 창의성 낮춤 (계산 정확도 위함)
+                    temperature=0.0  # 추론을 억제하고 정량적 정확도를 극대화하기 위해 0.0 설정
                 )
                 answer = res.choices[0].message.content
 
             except Exception as e:
-                answer = f"⚠️ 오류가 발생했습니다: {e}"
+                answer = f"⚠️ 입시 데이터를 분석하는 중 예기치 못한 에러가 발생했습니다: {e}"
 
+            # 화면 출력 및 메모리에 저장
             st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
-            
-
-
-
